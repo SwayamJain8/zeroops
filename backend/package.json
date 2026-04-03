@@ -1,0 +1,42 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@aws-sdk/client-apprunner": "^3.1023.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1023.0",
+    "@aws-sdk/client-codebuild": "^3.1023.0",
+    "@aws-sdk/client-ec2": "^3.1023.0",
+    "@aws-sdk/client-ecr": "^3.1023.0",
+    "@aws-sdk/client-ssm": "^3.1023.0",
+    "@google/genai": "^1.48.0",
+    "@google/generative-ai": "^0.24.1",
+    "@octokit/rest": "^22.0.1",
+    "@supabase/supabase-js": "^2.101.1",
+    "bullmq": "^5.73.0",
+    "cloudflare": "^5.2.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.0",
+    "express": "^5.2.1",
+    "helmet": "^8.1.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "nodemon": "^3.1.14",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  }
+}

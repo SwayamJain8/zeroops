@@ -313,16 +313,16 @@ export function createRuleBasedPlan(
     };
   }
 
-  // Fallback
+  // Fallback: strict unknown handling
   return {
     appPath: ".",
-    installCommand: "npm ci || npm install",
-    buildCommand: "npm run build --if-present",
-    runCommand: "npm start",
+    installCommand: "echo \"Unsupported stack for auto-plan\" && exit 1",
+    buildCommand: null,
+    runCommand: "echo \"Unsupported stack for auto-plan\" && exit 1",
     outputDir: null,
     healthPath: "/",
-    runtime: "node",
-    notes: ["Fallback deployment plan used."],
+    runtime: "static",
+    notes: ["Unsupported stack: provide a Dockerfile or supported app structure."],
   };
 }
 

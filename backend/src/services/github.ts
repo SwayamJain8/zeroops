@@ -66,16 +66,28 @@ export async function fetchKeyFiles(
   tree: RepoFile[]
 ): Promise<Record<string, string>> {
   const contents: Record<string, string> = {};
-  const filesToFetch = tree.filter(
-    (f) => f.type === "file" && KEY_FILES.includes(f.path.split("/").pop()!)
-  );
+  const filesToFetch = tree.filter((f) => {
+    if (f.type !== "file") return false;
+    const base = f.path.split("/").pop()!;
+    return KEY_FILES.includes(base);
+  });
 
-  const rootFiles = filesToFetch.filter(
-    (f) => !f.path.includes("/") || f.path.split("/").length <= 2
-  );
+  const scored = filesToFetch
+    .map((f) => {
+      const depth = f.path.split("/").length;
+      const isRoot = depth === 1;
+      const inCommonMonorepoRoot = /^(apps|services|packages)\//.test(f.path);
+      const score =
+        (isRoot ? 100 : 0) +
+        (inCommonMonorepoRoot ? 30 : 0) -
+        depth;
+      return { file: f, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.file);
 
   await Promise.all(
-    rootFiles.slice(0, 10).map(async (file) => {
+    scored.slice(0, 60).map(async (file) => {
       try {
         const { data } = await octokit.rest.repos.getContent({
           owner,

@@ -135,7 +135,8 @@ export async function deployToEc2(
   ecrUri: string,
   imageTag: string,
   envVars: { key: string; value: string }[],
-  healthPath: string = "/"
+  healthPath: string = "/",
+  options?: { allow404Health?: boolean }
 ): Promise<{ port: number; url: string }> {
   const imageFullUri = `${ecrUri}:${imageTag}`;
   const containerName = `zeroops-${slug}`;
@@ -150,6 +151,7 @@ export async function deployToEc2(
     .map((v) => `-e ${v.key}="${v.value}"`)
     .join(" ");
 
+  const allow404Health = options?.allow404Health === true;
   const commands = [
     // Login to ECR
     `aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${accountId}.dkr.ecr.${region}.amazonaws.com`,
@@ -166,15 +168,27 @@ export async function deployToEc2(
     `probe_http() {
       PATH_TO_CHECK="$1";
       CODE="$(curl -sS -o /dev/null -w "%{http_code}" "http://127.0.0.1:${'$'}HOST_PORT${'$'}PATH_TO_CHECK" || true)";
-      if [ "${'$'}CODE" != "000" ]; then
-        echo "HTTP_ALIVE code=${'$'}CODE path=${'$'}PATH_TO_CHECK";
+      if [[ "${'$'}CODE" =~ ^[23][0-9][0-9]$ ]]; then
+        echo "HTTP_HEALTHY code=${'$'}CODE path=${'$'}PATH_TO_CHECK";
         return 0;
+      fi;
+      if [ "${allow404Health ? "1" : "0"}" = "1" ] && [ "${'$'}CODE" = "404" ]; then
+        echo "HTTP_HEALTHY_404_ALLOWED path=${'$'}PATH_TO_CHECK";
+        return 0;
+      fi;
+      if [ "${'$'}CODE" = "000" ]; then
+        echo "HTTP_UNREACHABLE path=${'$'}PATH_TO_CHECK";
+      else
+        echo "HTTP_UNHEALTHY code=${'$'}CODE path=${'$'}PATH_TO_CHECK";
       fi;
       return 1;
     };
+    LAST_FAILED_PATH="";
     for i in $(seq 1 30); do
-      probe_http "${healthPath}" && echo "HEALTH_OK" && exit 0;
-      [ "${healthPath}" != "/" ] && probe_http "/" && echo "HEALTH_OK_FALLBACK_ROOT" && exit 0;
+      probe_http "${healthPath}" && echo "HEALTH_OK" && exit 0 || LAST_FAILED_PATH="${healthPath}";
+      if [ "${healthPath}" != "/" ]; then
+        probe_http "/" && echo "HEALTH_OK_FALLBACK_ROOT" && exit 0 || LAST_FAILED_PATH="/";
+      fi;
       STATUS="$(docker ps --filter name=^/${containerName}$ --format "{{.Status}}")";
       if [ -z "${'$'}STATUS" ]; then
         echo "CONTAINER_EXITED_BEFORE_HEALTHCHECK";
@@ -201,6 +215,8 @@ export async function deployToEc2(
     fi;
     echo "HEALTHCHECK_TIMEOUT_OR_FAILED";
     echo "TARGET=http://127.0.0.1:${'$'}HOST_PORT${healthPath}";
+    echo "LAST_FAILED_PATH=${'$'}LAST_FAILED_PATH";
+    echo "EXPECTED_HTTP=2xx_or_3xx";
     if [ -n "${'$'}DETECTED_PORT" ]; then echo "DETECTED_APP_PORT=${'$'}DETECTED_PORT"; fi;
     echo "LAST_CONTAINER_STATE:";
     docker ps -a --filter name=^/${containerName}$ --format "{{.Status}}";

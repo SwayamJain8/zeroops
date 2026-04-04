@@ -13,12 +13,18 @@ export async function requireAuth(
   next: NextFunction
 ) {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith("Bearer ")) {
-    res.status(401).json({ error: "Missing authorization header" });
+  const bearerToken = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : null;
+  const queryToken =
+    typeof req.query.token === "string" && req.query.token.trim()
+      ? req.query.token.trim()
+      : null;
+  const token = bearerToken || queryToken;
+  if (!token) {
+    res.status(401).json({ error: "Missing authorization token" });
     return;
   }
-
-  const token = authHeader.slice(7);
 
   const {
     data: { user },

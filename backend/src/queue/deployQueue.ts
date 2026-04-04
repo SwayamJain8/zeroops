@@ -8,6 +8,7 @@ import { deployToEc2 } from "../services/ec2Deployer";
 import { createSubdomain } from "../services/domain";
 import { StackInfo } from "../services/analyzer";
 import { DeploymentPlan } from "../services/deployPlanner";
+import { createOctokitClient, fetchRepoTree, RepoFile } from "../services/github";
 
 interface DeployJobData {
   projectId: string;
@@ -20,6 +21,30 @@ interface DeployJobData {
 }
 
 const USE_REDIS = false;
+const APP_SIGNAL_FILES = new Set([
+  "package.json",
+  "requirements.txt",
+  "pyproject.toml",
+  "pipfile",
+  "gemfile",
+  "index.html",
+  "dockerfile",
+  "app.py",
+  "main.py",
+  "server.js",
+]);
+
+interface RepoFilesSummary {
+  totalFiles: number;
+  hasDockerfile: boolean;
+  hasAnyAppSignal: boolean;
+  monorepoAppPaths: string[];
+}
+type DeploymentMode =
+  | "single_frontend"
+  | "single_backend"
+  | "separate_frontend_backend"
+  | "monorepo_auto";
 
 async function updateDeploymentStatus(
   deploymentId: string,
@@ -48,6 +73,157 @@ async function updateDeploymentStatus(
 function log(deploymentId: string, step: string, detail: string) {
   const ts = new Date().toISOString();
   console.log(`[DEPLOY ${deploymentId}] [${ts}] [${step}] ${detail}`);
+}
+
+function parseRepoUrl(url: string): { owner: string; repo: string } {
+  const match = url.match(/github\.com\/([^/]+)\/([^/.\s]+)/);
+  if (!match) throw new Error("Invalid GitHub repo URL");
+  return { owner: match[1], repo: match[2] };
+}
+
+function dirname(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx === -1 ? "." : path.slice(0, idx);
+}
+
+function summarizeRepoTree(tree: RepoFile[]): RepoFilesSummary {
+  const files = tree.filter((f) => f.type === "file").map((f) => f.path);
+  const monorepoRoots = new Set<string>();
+  for (const filePath of files) {
+    const base = filePath.split("/").pop()?.toLowerCase() || "";
+    if (APP_SIGNAL_FILES.has(base)) {
+      const dir = dirname(filePath);
+      if (dir !== "." && /^(apps|services|packages)\//.test(dir)) {
+        const appRoot = dir.split("/").slice(0, 2).join("/");
+        monorepoRoots.add(appRoot);
+      }
+    }
+  }
+
+  return {
+    totalFiles: files.length,
+    hasDockerfile: files.some((p) => p.toLowerCase().endsWith("dockerfile")),
+    hasAnyAppSignal: files.some((p) =>
+      APP_SIGNAL_FILES.has(p.split("/").pop()?.toLowerCase() || "")
+    ),
+    monorepoAppPaths: Array.from(monorepoRoots),
+  };
+}
+
+async function fetchRepoFilesSummary(
+  repoUrl: string,
+  githubToken?: string
+): Promise<RepoFilesSummary | null> {
+  try {
+    const { owner, repo } = parseRepoUrl(repoUrl);
+    const octokit = createOctokitClient(githubToken || "");
+    const tree = await fetchRepoTree(octokit, owner, repo);
+    return summarizeRepoTree(tree);
+  } catch {
+    return null;
+  }
+}
+
+function validateDeployability(args: {
+  stackInfo: StackInfo;
+  deploymentPlan?: DeploymentPlan;
+  filesSummary: RepoFilesSummary | null;
+  shouldUseMonorepoSplit: boolean;
+  deploymentMode: DeploymentMode;
+}): string[] {
+  const {
+    stackInfo,
+    deploymentPlan,
+    filesSummary,
+    shouldUseMonorepoSplit,
+    deploymentMode,
+  } = args;
+  const errors: string[] = [];
+  const hasDockerfile = stackInfo.hasDockerfile || !!filesSummary?.hasDockerfile;
+  const hasSplitMonorepoSignals =
+    shouldUseMonorepoSplit && (filesSummary?.monorepoAppPaths.length || 0) >= 2;
+
+  if (filesSummary && filesSummary.totalFiles === 0) {
+    errors.push(
+      "Repository appears empty. Add application code (or a Dockerfile) before deploying."
+    );
+  }
+
+  if (
+    filesSummary &&
+    !hasDockerfile &&
+    !filesSummary.hasAnyAppSignal &&
+    stackInfo.type === "unknown"
+  ) {
+    errors.push(
+      "Could not detect a runnable app (no Dockerfile or known app manifests found)."
+    );
+  }
+
+  if (stackInfo.type === "unknown" && !hasDockerfile && !hasSplitMonorepoSignals) {
+    errors.push(
+      "Unsupported repository structure for auto-deploy. Add a Dockerfile or use a supported stack layout."
+    );
+  }
+  if (stackInfo.backend === "go") {
+    errors.push(
+      "Go auto-deploy is temporarily disabled in this build. Please add a custom Dockerfile for Go projects."
+    );
+  }
+
+  if (shouldUseMonorepoSplit) {
+    const appCount = filesSummary?.monorepoAppPaths.length ?? 0;
+    if (filesSummary && appCount < 2) {
+      errors.push(
+        "Monorepo split deployment requested, but two runnable app roots were not detected (expected paths like apps/frontend and apps/backend)."
+      );
+    }
+  }
+  if (
+    deploymentMode === "separate_frontend_backend" &&
+    !shouldUseMonorepoSplit
+  ) {
+    errors.push(
+      "Project is configured for separate frontend/backend deploy, but compatible monorepo structure was not detected."
+    );
+  }
+
+  if (!deploymentPlan && !hasDockerfile && !hasSplitMonorepoSignals) {
+    errors.push(
+      "No deployment plan available and no Dockerfile found. Reconnect the repo and try again."
+    );
+  }
+
+  return errors;
+}
+
+function resolveMonorepoSplitMode(
+  stackInfo: StackInfo,
+  repoUrl: string,
+  slug: string
+): { shouldUseMonorepoSplit: boolean; deploymentMode: DeploymentMode } {
+  const deploymentMode = (stackInfo.deploymentMode ||
+    "monorepo_auto") as DeploymentMode;
+  const isDetectedMonorepo =
+    stackInfo.type === "fullstack" &&
+    stackInfo.frontend === "react" &&
+    stackInfo.backend === "node";
+  const forceKnownMonorepo =
+    /test-monorepo-fs/i.test(repoUrl) || /test-monorepo-fs/i.test(slug);
+
+  if (deploymentMode === "separate_frontend_backend") {
+    return { shouldUseMonorepoSplit: true, deploymentMode };
+  }
+  if (
+    deploymentMode === "single_backend" ||
+    deploymentMode === "single_frontend"
+  ) {
+    return { shouldUseMonorepoSplit: false, deploymentMode };
+  }
+  return {
+    shouldUseMonorepoSplit: isDetectedMonorepo || forceKnownMonorepo,
+    deploymentMode,
+  };
 }
 
 function normalizeKey(key: string) {
@@ -114,7 +290,7 @@ function getMonorepoPlans(stackInfo: StackInfo) {
     runCommand:
       "npm run start -w backend || npm run start --workspace=backend || npm --prefix apps/backend run start",
     outputDir: null,
-    healthPath: "/",
+    healthPath: "/health",
     runtime: "node",
     notes: [
       "Monorepo split deploy: backend workspace.",
@@ -190,13 +366,34 @@ async function processDeployJob(data: DeployJobData) {
       );
     }
 
-    const isMonorepoSplit =
-      stackInfo.type === "fullstack" &&
-      stackInfo.frontend === "react" &&
-      stackInfo.backend === "node";
-    const forceKnownMonorepo =
-      /test-monorepo-fs/i.test(repoUrl) || /test-monorepo-fs/i.test(slug);
-    const shouldUseMonorepoSplit = isMonorepoSplit || forceKnownMonorepo;
+    const { shouldUseMonorepoSplit, deploymentMode } = resolveMonorepoSplitMode(
+      stackInfo,
+      repoUrl,
+      slug
+    );
+    const filesSummary = await fetchRepoFilesSummary(repoUrl, githubToken);
+    log(
+      deploymentId,
+      "PREFLIGHT",
+      `deploymentMode=${deploymentMode} split=${shouldUseMonorepoSplit}`
+    );
+    if (filesSummary) {
+      log(
+        deploymentId,
+        "PREFLIGHT",
+        `Repo files=${filesSummary.totalFiles}, hasDockerfile=${filesSummary.hasDockerfile}, appSignals=${filesSummary.hasAnyAppSignal}, monorepoApps=${filesSummary.monorepoAppPaths.join(",") || "(none)"}`
+      );
+    }
+    const preflightErrors = validateDeployability({
+      stackInfo,
+      deploymentPlan,
+      filesSummary,
+      shouldUseMonorepoSplit,
+      deploymentMode,
+    });
+    if (preflightErrors.length > 0) {
+      throw new Error(`Preflight failed: ${preflightErrors.join(" ")}`);
+    }
 
     // Step 1: Ensure ECR repo exists
     log(deploymentId, "ECR", "Ensuring ECR repository exists...");
@@ -270,6 +467,12 @@ async function processDeployJob(data: DeployJobData) {
     let frontendUrl: string | undefined;
 
     if (shouldUseMonorepoSplit) {
+      const forceKnownMonorepo =
+        /test-monorepo-fs/i.test(repoUrl) || /test-monorepo-fs/i.test(slug);
+      const isMonorepoSplit =
+        stackInfo.type === "fullstack" &&
+        stackInfo.frontend === "react" &&
+        stackInfo.backend === "node";
       if (!isMonorepoSplit && forceKnownMonorepo) {
         log(
           deploymentId,
@@ -294,6 +497,7 @@ async function processDeployJob(data: DeployJobData) {
 
       const backendSlug = `${slug}-be`;
       const frontendSlug = `${slug}-fe`;
+      const frontendRuntimeSlug = slug;
 
       const backendBuild = await runBuildAndPoll(backendSlug, backendPlan);
       const backendEnv = withAutoUrls(envVars, {});
@@ -302,7 +506,8 @@ async function processDeployJob(data: DeployJobData) {
         backendBuild.ecrUri,
         backendBuild.imageTag,
         backendEnv,
-        backendPlan.healthPath
+        backendPlan.healthPath,
+        { allow404Health: true }
       );
       backendUrl = backendDeploy.url;
       log(deploymentId, "MONOREPO", `Backend deployed at ${backendUrl}`);
@@ -320,14 +525,18 @@ async function processDeployJob(data: DeployJobData) {
       );
       const frontendEnv = withAutoUrls(envVars, { backendUrl });
       const frontendDeploy = await deployToEc2(
-        frontendSlug,
+        frontendRuntimeSlug,
         frontendBuild.ecrUri,
         frontendBuild.imageTag,
         frontendEnv,
         frontendPlan.healthPath
       );
       frontendUrl = frontendDeploy.url;
-      log(deploymentId, "MONOREPO", `Frontend deployed at ${frontendUrl}`);
+      log(
+        deploymentId,
+        "MONOREPO",
+        `Frontend deployed at ${frontendUrl} (runtime slug: ${frontendRuntimeSlug}, image slug: ${frontendSlug})`
+      );
 
       // Optional second backend deploy to inject frontend URL for CORS/app URL keys.
       const needsFrontendUrlInBackend = envVars.some((v) =>
@@ -345,7 +554,8 @@ async function processDeployJob(data: DeployJobData) {
           backendBuild.ecrUri,
           backendBuild.imageTag,
           backendEnvWithFrontend,
-          backendPlan.healthPath
+          backendPlan.healthPath,
+          { allow404Health: true }
         );
       }
 

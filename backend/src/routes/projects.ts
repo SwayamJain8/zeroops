@@ -143,7 +143,7 @@ router.post(
         repo_url,
         repo_owner: repoInfo.owner,
         repo_name: repoInfo.repo,
-        stack_info: { ...stackInfo, deploymentPlan },
+        stack_info: { ...stackInfo, deploymentMode: deployment_type, deploymentPlan },
         env_vars: env_vars || [],
         status: "idle",
       })

@@ -63,6 +63,12 @@ export default function ProjectPage() {
   const [isChatExpanded, setIsChatExpanded] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const activeDeploymentIdRef = useRef<string | null>(null);
+  const deployingRef = useRef(false);
+
+  const closeStatusStream = () => {
+    eventSourceRef.current?.close();
+    eventSourceRef.current = null;
+  };
 
   const fetchProject = async () => {
     if (!session?.access_token) return;
@@ -79,6 +85,74 @@ export default function ProjectPage() {
   useEffect(() => {
     fetchProject();
   }, [session, id]);
+
+  useEffect(() => {
+    deployingRef.current = deploying;
+  }, [deploying]);
+
+  const startStatusStream = (projectId: string, token: string) => {
+    closeStatusStream();
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+    const es = new EventSource(
+      `${apiUrl}/api/deploy/${projectId}/status?token=${token}`
+    );
+    eventSourceRef.current = es;
+
+    es.onmessage = (event) => {
+      const data = JSON.parse(event.data) as {
+        project?: Partial<Project>;
+        deployment?: Deployment;
+      };
+      const latestDeployment = data.deployment;
+
+      setProject((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...data.project,
+              deployments: upsertDeployment(prev.deployments, latestDeployment),
+            }
+          : prev
+      );
+
+      if (latestDeployment?.id === activeDeploymentIdRef.current) {
+        if (TERMINAL_DEPLOYMENT_STATUSES.has(latestDeployment.status)) {
+          setDeploying(false);
+          setActiveDeploymentId(null);
+          activeDeploymentIdRef.current = null;
+          closeStatusStream();
+          fetchProject();
+        }
+      }
+
+      if (!activeDeploymentIdRef.current && latestDeployment?.id) {
+        setActiveDeploymentId(latestDeployment.id);
+        activeDeploymentIdRef.current = latestDeployment.id;
+      }
+
+      if (
+        !activeDeploymentIdRef.current &&
+        (data.project?.status === "deployed" || data.project?.status === "failed")
+      ) {
+        closeStatusStream();
+        setDeploying(false);
+        setActiveDeploymentId(null);
+        activeDeploymentIdRef.current = null;
+        fetchProject();
+      }
+    };
+
+    es.onerror = () => {
+      // Network hiccups can close SSE. Close stale stream and refresh.
+      closeStatusStream();
+      fetchProject();
+      if (deployingRef.current) {
+        setDeploying(false);
+        setActiveDeploymentId(null);
+        activeDeploymentIdRef.current = null;
+      }
+    };
+  };
 
   const handleDeploy = async () => {
     if (!session?.access_token || !project) return;
@@ -103,66 +177,12 @@ export default function ProjectPage() {
           : prev
       );
 
-      // Start SSE polling
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-      const es = new EventSource(
-        `${apiUrl}/api/deploy/${project.id}/status?token=${session.access_token}`
+      startStatusStream(project.id, session.access_token);
+    } catch (err: any) {
+      console.error(
+        "Failed to start deployment:",
+        err?.message || "Failed to start deployment. Please check your repo access and try again."
       );
-      eventSourceRef.current = es;
-
-      es.onmessage = (event) => {
-        const data = JSON.parse(event.data) as {
-          project?: Partial<Project>;
-          deployment?: Deployment;
-        };
-        const latestDeployment = data.deployment;
-
-        setProject((prev) =>
-          prev
-            ? {
-                ...prev,
-                ...data.project,
-                deployments: upsertDeployment(prev.deployments, latestDeployment),
-              }
-            : prev
-        );
-
-        if (latestDeployment?.id === activeDeploymentIdRef.current) {
-          if (TERMINAL_DEPLOYMENT_STATUSES.has(latestDeployment.status)) {
-            setDeploying(false);
-            setActiveDeploymentId(null);
-            activeDeploymentIdRef.current = null;
-            es.close();
-            fetchProject();
-          }
-        }
-
-        if (!activeDeploymentIdRef.current && latestDeployment?.id && deploying) {
-          setActiveDeploymentId(latestDeployment.id);
-          activeDeploymentIdRef.current = latestDeployment.id;
-        }
-
-        if (
-          !activeDeploymentIdRef.current &&
-          (data.project?.status === "deployed" || data.project?.status === "failed")
-        ) {
-          es.close();
-          setDeploying(false);
-          setActiveDeploymentId(null);
-          activeDeploymentIdRef.current = null;
-          fetchProject();
-        }
-      };
-
-      es.onerror = () => {
-        es.close();
-        setDeploying(false);
-        setActiveDeploymentId(null);
-        activeDeploymentIdRef.current = null;
-        fetchProject();
-      };
-    } catch (err) {
-      console.error("Deploy failed:", err);
       setDeploying(false);
       setActiveDeploymentId(null);
       activeDeploymentIdRef.current = null;
@@ -170,8 +190,19 @@ export default function ProjectPage() {
   };
 
   useEffect(() => {
+    if (
+      project?.id &&
+      session?.access_token &&
+      project.status === "building" &&
+      !eventSourceRef.current
+    ) {
+      startStatusStream(project.id, session.access_token);
+    }
+  }, [project?.id, project?.status, session?.access_token]);
+
+  useEffect(() => {
     return () => {
-      eventSourceRef.current?.close();
+      closeStatusStream();
     };
   }, []);
 
@@ -472,6 +503,8 @@ export default function ProjectPage() {
 }
 
 function DeploymentsList({ deployments }: { deployments: Deployment[] }) {
+  const [expandedErrors, setExpandedErrors] = useState<Record<string, boolean>>({});
+
   if (deployments.length === 0) {
     return (
       <p className="text-muted-foreground text-sm text-center py-12">
@@ -501,7 +534,7 @@ function DeploymentsList({ deployments }: { deployments: Deployment[] }) {
         return (
           <div
             key={d.id}
-            className="flex items-center justify-between p-4 border border-border rounded-lg"
+            className="flex items-start justify-between gap-4 p-4 border border-border rounded-lg"
           >
             <div className="flex items-center gap-3">
               <StatusIcon
@@ -524,9 +557,27 @@ function DeploymentsList({ deployments }: { deployments: Deployment[] }) {
               </div>
             </div>
             {d.error_message && (
-              <p className="text-xs text-destructive max-w-xs truncate">
-                {d.error_message}
-              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  setExpandedErrors((prev) => ({
+                    ...prev,
+                    [d.id]: !prev[d.id],
+                  }))
+                }
+                className="max-w-md text-left"
+              >
+                <p className="text-xs text-destructive whitespace-pre-wrap wrap-break-word">
+                  {expandedErrors[d.id]
+                    ? d.error_message
+                    : `${d.error_message.split("\n")[0].slice(0, 120)}${
+                        d.error_message.length > 120 ? "..." : ""
+                      }`}
+                </p>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  {expandedErrors[d.id] ? "Click to collapse" : "Click to expand"}
+                </p>
+              </button>
             )}
           </div>
         );

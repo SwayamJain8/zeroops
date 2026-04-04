@@ -220,15 +220,20 @@ export default function DashboardPage() {
                         }
                       />
                       {project.live_url && (
-                        <a
-                          href={project.live_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-muted-foreground hover:text-foreground"
-                          onClick={(e) => e.stopPropagation()}
+                        <button
+                          type="button"
+                          className="text-muted-foreground hover:text-foreground cursor-pointer"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            const liveUrl = project.live_url;
+                            if (!liveUrl) return;
+                            window.open(liveUrl, "_blank", "noopener,noreferrer");
+                          }}
+                          aria-label="Open live project URL"
                         >
                           <ExternalLink className="w-4 h-4" />
-                        </a>
+                        </button>
                       )}
                     </div>
                   </div>

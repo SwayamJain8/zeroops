@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, buildApiUrl } from "@/lib/api";
 import type { ChatMessage } from "@/lib/types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -109,10 +109,7 @@ export default function ChatPanel({ projectId, token }: Props) {
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
     try {
-      const apiUrl =
-        process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-
-      const response = await fetch(`${apiUrl}/api/chat/${projectId}`, {
+      const response = await fetch(buildApiUrl(`/api/chat/${projectId}`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

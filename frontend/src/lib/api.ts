@@ -1,4 +1,11 @@
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+export const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
+  (process.env.NODE_ENV === "development" ? "http://localhost:4000" : "");
+
+export function buildApiUrl(path: string) {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return API_BASE_URL ? `${API_BASE_URL}${normalizedPath}` : normalizedPath;
+}
 
 export async function api(
   path: string,
@@ -15,7 +22,7 @@ export async function api(
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(buildApiUrl(path), {
     ...fetchOptions,
     headers,
   });

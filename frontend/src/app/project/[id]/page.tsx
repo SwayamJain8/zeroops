@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { useSession } from "@/hooks/useSession";
-import { api } from "@/lib/api";
+import { api, buildApiUrl } from "@/lib/api";
 import type { Project, Deployment } from "@/lib/types";
 import {
   Activity,
@@ -92,10 +92,10 @@ export default function ProjectPage() {
 
   const startStatusStream = (projectId: string, token: string) => {
     closeStatusStream();
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-    const es = new EventSource(
-      `${apiUrl}/api/deploy/${projectId}/status?token=${token}`
+    const statusUrl = buildApiUrl(
+      `/api/deploy/${projectId}/status?token=${encodeURIComponent(token)}`
     );
+    const es = new EventSource(statusUrl);
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {

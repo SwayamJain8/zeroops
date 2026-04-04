@@ -59,6 +59,51 @@ async function runCommandOnEc2(commands: string[]): Promise<string> {
   throw new Error("EC2 command timed out");
 }
 
+/** When true, nginx on EC2 listens on :80 and routes each slug.domain → 127.0.0.1:hostPort (use with Cloudflare proxy). */
+export function isEdgeProxyEnabled(): boolean {
+  return process.env.ZEROOPS_EDGE_PROXY === "true";
+}
+
+function appDomainForNginx(): string {
+  return process.env.CLOUDFLARE_DOMAIN || process.env.ZEROOPS_APP_DOMAIN || "zeroops.com";
+}
+
+/**
+ * Writes one nginx vhost: Host slug.domain → proxy to container on hostPort.
+ * Requires nginx installed on EC2; failures are thrown (caller may catch).
+ */
+async function syncNginxVhostForSlug(slug: string, hostPort: number): Promise<void> {
+  const domain = appDomainForNginx();
+  const fqdn = `${slug}.${domain}`;
+  const safeFile = slug.replace(/[^a-zA-Z0-9._-]/g, "-");
+  const confPath = `/etc/nginx/sites-available/zeroops-${safeFile}.conf`;
+
+  const conf = [
+    "server {",
+    "    listen 80;",
+    "    listen [::]:80;",
+    `    server_name ${fqdn};`,
+    "    location / {",
+    `        proxy_pass http://127.0.0.1:${hostPort};`,
+    "        proxy_http_version 1.1;",
+    "        proxy_set_header Host $host;",
+    "        proxy_set_header X-Real-IP $remote_addr;",
+    "        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+    "        proxy_set_header X-Forwarded-Proto $scheme;",
+    "        proxy_read_timeout 300s;",
+    "    }",
+    "}",
+    "",
+  ].join("\n");
+
+  const b64 = Buffer.from(conf, "utf8").toString("base64");
+  await runCommandOnEc2([
+    `printf '%s' '${b64}' | base64 -d | sudo tee "${confPath}" > /dev/null`,
+    `sudo ln -sf "${confPath}" "/etc/nginx/sites-enabled/zeroops-${safeFile}.conf"`,
+    `sudo nginx -t && sudo systemctl reload nginx`,
+  ]);
+}
+
 async function getExistingContainerPort(
   containerName: string
 ): Promise<number | null> {
@@ -170,6 +215,18 @@ export async function deployToEc2(
 
   const assignedPortMatch = output.match(/ASSIGNED_HOST_PORT=(\d+)/);
   const finalPort = assignedPortMatch ? parseInt(assignedPortMatch[1], 10) : port;
+
+  if (isEdgeProxyEnabled()) {
+    try {
+      await syncNginxVhostForSlug(slug, finalPort);
+      console.log(`[EC2] Nginx edge route: ${slug}.${appDomainForNginx()} -> 127.0.0.1:${finalPort}`);
+    } catch (err: any) {
+      console.warn(
+        `[EC2] ZEROOPS_EDGE_PROXY is on but nginx sync failed (${err?.message || err}). Using direct :port URL.`
+      );
+    }
+  }
+
   const url = `http://${ec2PublicHost}:${finalPort}`;
   return { port: finalPort, url };
 }

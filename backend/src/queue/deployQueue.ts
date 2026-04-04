@@ -375,12 +375,25 @@ async function processDeployJob(data: DeployJobData) {
       }
     }
 
-    // Step 5: Create Cloudflare subdomain
-    log(deploymentId, "DNS", `Creating subdomain: ${slug}...`);
+    // Step 5: Cloudflare DNS — map slug.domain → EC2 IP (A) or hostname (CNAME); live_url uses :port when needed
+    log(deploymentId, "DNS", `Creating subdomain for primary URL: ${slug}...`);
     let liveUrl: string;
     try {
       liveUrl = await createSubdomain(slug, serviceUrl);
-      log(deploymentId, "DNS", `Subdomain live: ${liveUrl}`);
+      log(deploymentId, "DNS", `Primary subdomain live: ${liveUrl}`);
+      if (shouldUseMonorepoSplit && backendUrl) {
+        const backendDnsSlug = `${slug}-be`;
+        try {
+          const backendLive = await createSubdomain(backendDnsSlug, backendUrl);
+          log(deploymentId, "DNS", `Backend subdomain live: ${backendLive}`);
+        } catch (beErr: any) {
+          log(
+            deploymentId,
+            "DNS",
+            `Backend DNS failed (${beErr.message}) — API still reachable at ${backendUrl}`
+          );
+        }
+      }
     } catch (err: any) {
       log(deploymentId, "DNS", `FAILED: ${err.message} — using EC2 URL directly`);
       liveUrl = serviceUrl;

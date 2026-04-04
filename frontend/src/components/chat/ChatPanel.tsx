@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import type { ChatMessage } from "@/lib/types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   MessageSquare,
   Send,
@@ -11,6 +13,7 @@ import {
   User,
   Wrench,
 } from "lucide-react";
+import LlmProviderSelector from "./LlmProviderSelector";
 
 interface Props {
   projectId: string;
@@ -25,6 +28,23 @@ interface DisplayMessage {
   isStreaming?: boolean;
 }
 
+const mergeStreamText = (existing: string, incoming: string) => {
+  if (!incoming) return existing;
+  if (!existing) return incoming;
+  if (incoming.startsWith(existing)) return incoming;
+  if (existing.endsWith(incoming) || existing.includes(incoming)) return existing;
+  return `${existing}${incoming}`;
+};
+
+const toFriendlyError = (message?: string) => {
+  const raw = (message || "").trim();
+  if (!raw) return "ZeroOps Agent is temporarily unavailable. Please try again.";
+  if (raw.toLowerCase().includes("quota") || raw.toLowerCase().includes("rate")) {
+    return raw;
+  }
+  return "ZeroOps Agent hit a temporary issue. Please retry in a few seconds.";
+};
+
 export default function ChatPanel({ projectId, token }: Props) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState("");
@@ -32,6 +52,7 @@ export default function ChatPanel({ projectId, token }: Props) {
   const [loadingHistory, setLoadingHistory] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const activeAssistantIdRef = useRef<string | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -76,12 +97,14 @@ export default function ChatPanel({ projectId, token }: Props) {
       content: text,
     };
 
+    const assistantMessageId = `assistant-${Date.now()}`;
     const assistantMsg: DisplayMessage = {
-      id: `assistant-${Date.now()}`,
+      id: assistantMessageId,
       role: "assistant",
       content: "",
       isStreaming: true,
     };
+    activeAssistantIdRef.current = assistantMessageId;
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
 
@@ -121,28 +144,28 @@ export default function ChatPanel({ projectId, token }: Props) {
             const event = JSON.parse(line.slice(6));
 
             if (event.type === "text") {
+              const chunk = typeof event.content === "string" ? event.content : "";
+              const currentAssistantId = activeAssistantIdRef.current;
+              if (!currentAssistantId) continue;
               setMessages((prev) => {
-                const updated = [...prev];
-                const last = updated[updated.length - 1];
-                if (last && last.isStreaming) {
-                  last.content += event.content;
-                }
-                return updated;
+                return prev.map((msg) => {
+                  if (msg.id !== currentAssistantId) return msg;
+                  return {
+                    ...msg,
+                    content: mergeStreamText(msg.content, chunk),
+                  };
+                });
               });
             }
 
             if (event.type === "tool_call") {
               const toolMsg: DisplayMessage = {
-                id: `tool-${Date.now()}`,
+                id: `tool-${Date.now()}-${event.tool}`,
                 role: "tool",
                 content: `Calling ${event.tool}...`,
                 toolName: event.tool,
               };
-              setMessages((prev) => {
-                const streaming = prev.filter((m) => m.isStreaming);
-                const rest = prev.filter((m) => !m.isStreaming);
-                return [...rest, toolMsg, ...streaming];
-              });
+              setMessages((prev) => [...prev, toolMsg]);
             }
 
             if (event.type === "tool_result") {
@@ -156,25 +179,38 @@ export default function ChatPanel({ projectId, token }: Props) {
             }
 
             if (event.type === "done") {
+              const currentAssistantId = activeAssistantIdRef.current;
               setMessages((prev) =>
                 prev.map((m) =>
-                  m.isStreaming ? { ...m, isStreaming: false } : m
-                )
-              );
-            }
-
-            if (event.type === "error") {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.isStreaming
+                  m.id === currentAssistantId
                     ? {
                         ...m,
-                        content: `Error: ${event.message}`,
+                        content: mergeStreamText(
+                          m.content,
+                          typeof event.content === "string" ? event.content : ""
+                        ),
                         isStreaming: false,
                       }
                     : m
                 )
               );
+              activeAssistantIdRef.current = null;
+            }
+
+            if (event.type === "error") {
+              const currentAssistantId = activeAssistantIdRef.current;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === currentAssistantId
+                    ? {
+                        ...m,
+                        content: toFriendlyError(event.message),
+                        isStreaming: false,
+                      }
+                    : m
+                )
+              );
+              activeAssistantIdRef.current = null;
             }
           } catch {
             // Skip malformed events
@@ -182,17 +218,19 @@ export default function ChatPanel({ projectId, token }: Props) {
         }
       }
     } catch (err: any) {
+      const currentAssistantId = activeAssistantIdRef.current;
       setMessages((prev) =>
         prev.map((m) =>
-          m.isStreaming
+          m.id === currentAssistantId
             ? {
                 ...m,
-                content: `Error: ${err.message || "Failed to send message"}`,
+                content: toFriendlyError(err?.message),
                 isStreaming: false,
               }
             : m
         )
       );
+      activeAssistantIdRef.current = null;
     } finally {
       setSending(false);
       inputRef.current?.focus();
@@ -207,26 +245,29 @@ export default function ChatPanel({ projectId, token }: Props) {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* Header */}
-      <div className="p-4 border-b border-border shrink-0">
-        <h2 className="font-semibold flex items-center gap-2">
-          <MessageSquare className="w-4 h-4" />
+      <div className="shrink-0 border-b border-border p-4">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="font-semibold flex items-center gap-2">
+            <MessageSquare className="w-4 h-4" />
           Chat
-        </h2>
-        <p className="text-xs text-muted-foreground mt-0.5">
-          Ask about your deployment, debug errors, or request fixes.
+          </h2>
+          <LlmProviderSelector />
+        </div>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Ask about deployments, logs, and fixes.
         </p>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div className="no-scrollbar min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
         {loadingHistory ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
           </div>
         ) : messages.length === 0 ? (
-          <div className="text-center py-12">
+          <div className="py-12 text-center">
             <Bot className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-50" />
             <p className="text-sm text-muted-foreground">
               Ask me anything about your deployment.
@@ -243,7 +284,7 @@ export default function ChatPanel({ projectId, token }: Props) {
                     setInput(suggestion);
                     inputRef.current?.focus();
                   }}
-                  className="block mx-auto px-3 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:border-foreground/30 transition-colors cursor-pointer"
+                  className="mx-auto block cursor-pointer rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-brand-violet/40 hover:text-foreground"
                 >
                   {suggestion}
                 </button>
@@ -259,7 +300,7 @@ export default function ChatPanel({ projectId, token }: Props) {
       </div>
 
       {/* Input */}
-      <div className="p-4 border-t border-border shrink-0">
+      <div className="shrink-0 border-t border-border p-4">
         <div className="flex gap-2">
           <textarea
             ref={inputRef}
@@ -268,12 +309,12 @@ export default function ChatPanel({ projectId, token }: Props) {
             onKeyDown={handleKeyDown}
             placeholder="Ask about your deployment..."
             rows={1}
-            className="flex-1 px-3 py-2.5 rounded-lg border border-input bg-background text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+            className="flex-1 resize-none rounded-lg border border-input bg-background/60 px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
           <button
             onClick={handleSend}
             disabled={sending || !input.trim()}
-            className="px-3 py-2.5 rounded-lg bg-primary text-primary-foreground hover:opacity-90 transition-opacity disabled:opacity-50 cursor-pointer shrink-0"
+            className="shrink-0 rounded-lg bg-primary px-3 py-2.5 text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50 cursor-pointer"
           >
             {sending ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -290,7 +331,7 @@ export default function ChatPanel({ projectId, token }: Props) {
 function MessageBubble({ message }: { message: DisplayMessage }) {
   if (message.role === "tool") {
     return (
-      <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+      <div className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
         <Wrench className="w-3 h-3" />
         <span>{message.content}</span>
       </div>
@@ -302,24 +343,50 @@ function MessageBubble({ message }: { message: DisplayMessage }) {
   return (
     <div className={`flex gap-3 ${isUser ? "justify-end" : ""}`}>
       {!isUser && (
-        <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0 mt-0.5">
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10">
           <Bot className="w-4 h-4 text-primary" />
         </div>
       )}
       <div
-        className={`max-w-[85%] rounded-xl px-4 py-2.5 text-sm leading-relaxed ${
+        className={`max-w-[85%] rounded-xl border px-4 py-2.5 text-sm leading-relaxed ${
           isUser
-            ? "bg-primary text-primary-foreground"
-            : "bg-accent text-accent-foreground"
+            ? "border-primary/20 bg-primary text-primary-foreground"
+            : "border-border bg-accent/40 text-accent-foreground"
         }`}
       >
-        <div className="whitespace-pre-wrap">{message.content}</div>
+        {isUser ? (
+          <div className="whitespace-pre-wrap wrap-break-word">{message.content}</div>
+        ) : (
+          <div className="space-y-2 wrap-break-word text-sm leading-relaxed">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                p: ({ children }) => <p className="my-2 whitespace-pre-wrap">{children}</p>,
+                ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+                ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
+                li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+                code: ({ children }) => (
+                  <code className="rounded bg-background/60 px-1.5 py-0.5 font-mono text-xs">
+                    {children}
+                  </code>
+                ),
+                pre: ({ children }) => (
+                  <pre className="my-2 overflow-x-auto rounded-lg border border-border/60 bg-background/70 p-3 text-xs">
+                    {children}
+                  </pre>
+                ),
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
         {message.isStreaming && (
           <span className="inline-block w-1.5 h-4 bg-current animate-pulse ml-0.5" />
         )}
       </div>
       {isUser && (
-        <div className="w-7 h-7 rounded-full bg-accent flex items-center justify-center shrink-0 mt-0.5">
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent">
           <User className="w-4 h-4" />
         </div>
       )}

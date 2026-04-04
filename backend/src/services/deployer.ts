@@ -22,6 +22,7 @@ import {
   GetLogEventsCommand,
 } from "@aws-sdk/client-cloudwatch-logs";
 import { StackInfo } from "./analyzer";
+import { DeploymentPlan } from "./deployPlanner";
 
 const region = process.env.AWS_REGION || "us-east-1";
 const accountId = process.env.AWS_ACCOUNT_ID!;
@@ -31,28 +32,52 @@ const ecr = new ECRClient({ region });
 const apprunner = new AppRunnerClient({ region });
 const cwLogs = new CloudWatchLogsClient({ region });
 
-export function generateDockerfile(stack: StackInfo): string {
+export function generateDockerfile(
+  stack: StackInfo,
+  plan?: DeploymentPlan,
+  buildEnvVars: { key: string; value: string }[] = []
+): string {
   // Use ECR Public Gallery mirrors to avoid Docker Hub rate limits
   const NODE_IMAGE = "public.ecr.aws/docker/library/node:20-alpine";
   const PYTHON_IMAGE = "public.ecr.aws/docker/library/python:3.12-slim";
 
-  if (stack.type === "nextjs") {
-    return `FROM ${NODE_IMAGE} AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
+  if (plan) {
+    const argLines = buildEnvVars
+      .map((v) => `ARG ${v.key}`)
+      .join("\n");
+    const envLines = buildEnvVars
+      .map((v) => `ENV ${v.key}=\${${v.key}}`)
+      .join("\n");
+    const buildEnvBlock = [argLines, envLines].filter(Boolean).join("\n");
 
-FROM ${NODE_IMAGE} AS runner
-WORKDIR /app
-ENV NODE_ENV=production
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/public ./public
+    if (plan.runtime === "python") {
+      return `FROM ${PYTHON_IMAGE}
+WORKDIR /workspace
+COPY . .
+${buildEnvBlock}
+RUN sh -lc "cd ${plan.appPath} && ${plan.installCommand}"
 EXPOSE 3000
 ENV PORT=3000
-CMD ["node", "server.js"]`;
+CMD ["sh", "-lc", "cd ${plan.appPath} && ${plan.runCommand}"]`;
+    }
+
+    // node/static frontend/backend generic runtime
+    const needsServe = /\bserve\s+-s\b/.test(plan.runCommand);
+    const maybeInstallServe = needsServe ? "RUN npm i -g serve" : "";
+    const buildStep = plan.buildCommand
+      ? `RUN sh -lc "cd ${plan.appPath} && ${plan.buildCommand}"`
+      : "";
+    return `FROM ${NODE_IMAGE}
+WORKDIR /workspace
+COPY . .
+${buildEnvBlock}
+RUN sh -lc "cd ${plan.appPath} && ${plan.installCommand}"
+${maybeInstallServe}
+${buildStep}
+EXPOSE 3000
+ENV PORT=3000
+ENV HOST=0.0.0.0
+CMD ["sh", "-lc", "cd ${plan.appPath} && ${plan.runCommand}"]`;
   }
 
   if (stack.backend === "node") {
@@ -120,7 +145,8 @@ export function generateBuildSpec(
   imageTag: string,
   dockerfileContent: string,
   githubToken?: string,
-  forceDockerfile: boolean = false
+  forceDockerfile: boolean = false,
+  buildEnvVars: { key: string; value: string }[] = []
 ): string {
   const b64Dockerfile = Buffer.from(dockerfileContent).toString("base64");
 
@@ -132,6 +158,10 @@ export function generateBuildSpec(
       `https://${githubToken}@github.com/`
     );
   }
+
+  const buildArgs = buildEnvVars
+    .map((v) => `--build-arg ${v.key}=${JSON.stringify(v.value).slice(1, -1)}`)
+    .join(" ");
 
   return `version: 0.2
 phases:
@@ -164,7 +194,7 @@ phases:
     commands:
       - echo "=== Step 3/4 - Building Docker image ==="
       - cd /app/repo
-      - docker build -t ${ecrRepoUri}:${imageTag} .
+      - docker build ${buildArgs} -t ${ecrRepoUri}:${imageTag} .
   post_build:
     commands:
       - echo "=== Step 4/4 - Pushing to ECR ==="
@@ -196,10 +226,12 @@ export async function triggerBuild(
   repoUrl: string,
   stack: StackInfo,
   imageTag: string,
-  githubToken?: string
+  githubToken?: string,
+  plan?: DeploymentPlan,
+  buildEnvVars: { key: string; value: string }[] = []
 ): Promise<{ buildId: string; ecrUri: string }> {
   const ecrUri = await ensureEcrRepo(projectSlug);
-  const dockerfile = generateDockerfile(stack);
+  const dockerfile = generateDockerfile(stack, plan, buildEnvVars);
   const forceDockerfile = stack.frontend === "static";
   const buildSpec = generateBuildSpec(
     repoUrl,
@@ -207,7 +239,8 @@ export async function triggerBuild(
     imageTag,
     dockerfile,
     githubToken,
-    forceDockerfile
+    forceDockerfile,
+    buildEnvVars
   );
 
   const { build } = await codebuild.send(

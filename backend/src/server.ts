@@ -12,6 +12,7 @@ import logRoutes from "./routes/logs";
 import chatRoutes from "./routes/chat";
 import webhookRoutes from "./routes/webhooks";
 import { startDeployWorker } from "./queue/deployQueue";
+import { logger } from "./services/logger";
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -23,6 +24,22 @@ app.use(
     credentials: true,
   })
 );
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  logger.info(
+    "HTTP",
+    `${req.method} ${req.path} - request received`
+  );
+  res.on("finish", () => {
+    const elapsed = Date.now() - start;
+    logger.info(
+      "HTTP",
+      `${req.method} ${req.path} -> ${res.statusCode} (${elapsed}ms)`
+    );
+  });
+  next();
+});
 
 app.use("/api/webhooks", express.raw({ type: "application/json" }), webhookRoutes);
 
@@ -39,7 +56,8 @@ app.get("/health", (_req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`ZeroOps API running on port ${PORT}`);
+  logger.info("SERVER", `ZeroOps API running on port ${PORT}`);
+  logger.info("SERVER", `Frontend origin allowed: ${process.env.FRONTEND_URL || "http://localhost:3000"}`);
   startDeployWorker();
 });
 

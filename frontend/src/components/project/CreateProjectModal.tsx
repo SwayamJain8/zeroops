@@ -65,11 +65,13 @@ export default function CreateProjectModal({
   const [name, setName] = useState("");
   const [deploymentType, setDeploymentType] =
     useState<DeploymentType>("monorepo_auto");
+  const [deploymentOpen, setDeploymentOpen] = useState(false);
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const deploymentDropdownRef = useRef<HTMLDivElement>(null);
 
   const fetchRepos = async (p: number = 1, searchQuery: string = "") => {
     setLoadingRepos(true);
@@ -95,6 +97,19 @@ export default function CreateProjectModal({
   useEffect(() => {
     fetchRepos();
     setTimeout(() => searchRef.current?.focus(), 100);
+  }, []);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        deploymentDropdownRef.current &&
+        !deploymentDropdownRef.current.contains(event.target as Node)
+      ) {
+        setDeploymentOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
   const handleSearch = (value: string) => {
@@ -153,9 +168,23 @@ export default function CreateProjectModal({
     }
   };
 
+  const deploymentTypeOptions: { value: DeploymentType; label: string }[] = [
+    { value: "single_frontend", label: "Single Frontend App" },
+    { value: "single_backend", label: "Single Backend App" },
+    {
+      value: "separate_frontend_backend",
+      label: "Separate Frontend + Backend",
+    },
+    { value: "monorepo_auto", label: "Monorepo / Auto-detect" },
+  ];
+
+  const selectedDeploymentLabel =
+    deploymentTypeOptions.find((option) => option.value === deploymentType)?.label ??
+    "Monorepo / Auto-detect";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-card border border-border rounded-xl w-full max-w-lg mx-4 shadow-2xl h-[75vh] flex flex-col overflow-hidden">
+      <div className="bg-card border border-border rounded-xl w-full max-w-2xl mx-4 shadow-2xl h-[75vh] flex flex-col overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-border shrink-0">
           <h2 className="text-lg font-semibold">
@@ -260,7 +289,13 @@ export default function CreateProjectModal({
             </div>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto">
+          <form onSubmit={handleSubmit} className="p-5 space-y-4 overflow-y-auto overflow-x-hidden">
+            <div className="rounded-lg border border-border bg-background/50 p-3 text-xs text-muted-foreground">
+              Pro tip: for monorepo, add env placeholders like
+              <span className="mx-1 font-mono text-foreground">VITE_API_URL=__BACKEND_URL__</span>
+              and
+              <span className="ml-1 font-mono text-foreground">CORS_ORIGIN=__FRONTEND_URL__</span>.
+            </div>
             {/* Selected repo */}
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-accent text-sm">
               {selectedRepo?.private ? (
@@ -297,22 +332,47 @@ export default function CreateProjectModal({
               <label className="block text-sm font-medium mb-1.5">
                 Deployment Type
               </label>
-              <select
-                value={deploymentType}
-                onChange={(e) =>
-                  setDeploymentType(e.target.value as DeploymentType)
-                }
-                className="w-full px-3 py-2.5 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-              >
-                <option value="single_frontend">Single Frontend App</option>
-                <option value="single_backend">Single Backend App</option>
-                <option value="separate_frontend_backend">
-                  Separate Frontend + Backend
-                </option>
-                <option value="monorepo_auto">
-                  Monorepo / Auto-detect
-                </option>
-              </select>
+              <div ref={deploymentDropdownRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setDeploymentOpen((prev) => !prev)}
+                  className="inline-flex w-full items-center justify-between rounded-lg border border-input bg-background px-3 py-2.5 text-sm transition hover:border-brand-cyan/40 focus:outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <span>{selectedDeploymentLabel}</span>
+                  <ChevronDown
+                    className={`h-4 w-4 text-muted-foreground transition ${deploymentOpen ? "rotate-180" : ""}`}
+                  />
+                </button>
+                {deploymentOpen && (
+                  <div className="absolute left-0 top-[calc(100%+0.4rem)] z-20 w-full rounded-lg border border-border bg-background p-1.5 shadow-xl">
+                    {deploymentTypeOptions.map((option) => {
+                      const isActive = option.value === deploymentType;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => {
+                            setDeploymentType(option.value);
+                            setDeploymentOpen(false);
+                          }}
+                          className={`w-full rounded-md px-3 py-2 text-left text-sm transition ${
+                            isActive
+                              ? "bg-brand-cyan/15 text-foreground"
+                              : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Use <span className="font-mono">monorepo_auto</span> for
+                <span className="mx-1 font-mono">apps/frontend</span> +
+                <span className="ml-1 font-mono">apps/backend</span> structures.
+              </p>
             </div>
 
             <div>
@@ -329,30 +389,33 @@ export default function CreateProjectModal({
                 </button>
               </div>
               {envVars.map((v, i) => (
-                <div key={i} className="flex gap-2 mb-2">
+                <div key={i} className="mb-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
                   <input
                     type="text"
                     value={v.key}
                     onChange={(e) => updateEnvVar(i, "key", e.target.value)}
                     placeholder="KEY"
-                    className="flex-1 px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono"
+                    className="min-w-0 px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring font-mono"
                   />
                   <input
                     type="text"
                     value={v.value}
                     onChange={(e) => updateEnvVar(i, "value", e.target.value)}
                     placeholder="value"
-                    className="flex-1 px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                    className="min-w-0 px-3 py-2 rounded-lg border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   />
                   <button
                     type="button"
                     onClick={() => removeEnvVar(i)}
-                    className="p-2 text-muted-foreground hover:text-destructive cursor-pointer"
+                    className="h-10 w-10 justify-self-end p-2 text-muted-foreground hover:text-destructive cursor-pointer"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               ))}
+              <p className="text-xs text-muted-foreground">
+                Reserved key: <span className="font-mono">PORT</span> is managed automatically at deploy time.
+              </p>
             </div>
 
             {error && (

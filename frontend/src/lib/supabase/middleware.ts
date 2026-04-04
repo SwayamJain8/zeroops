@@ -14,26 +14,29 @@ export async function updateSession(request: NextRequest) {
         },
         setAll(cookiesToSet) {
           cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
+            request.cookies.set(name, value),
           );
           supabaseResponse = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            supabaseResponse.cookies.set(name, value, options),
           );
         },
       },
-    }
+    },
   );
 
   const {
     data: { user },
   } = await supabase.auth.getUser();
 
+  const pathname = request.nextUrl.pathname;
   const isAuthPage =
     request.nextUrl.pathname === "/login" ||
     request.nextUrl.pathname.startsWith("/auth/");
+  const isPublicPage = pathname === "/";
+  const isProtectedPage = !isPublicPage && !isAuthPage;
 
-  if (!user && !isAuthPage) {
+  if (!user && isProtectedPage) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);

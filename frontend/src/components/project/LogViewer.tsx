@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { Terminal, RefreshCw, Filter, Loader2 } from "lucide-react";
+import { GlassPanel } from "@/components/design/primitives";
 
 interface LogEntry {
   timestamp: number;
@@ -77,7 +78,7 @@ export default function LogViewer({ projectId, token }: Props) {
         </div>
       </div>
 
-      <div className="bg-zinc-950 rounded-lg border border-zinc-800 overflow-hidden">
+      <GlassPanel className="overflow-hidden border-brand-violet/20">
         {loading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-5 h-5 animate-spin text-zinc-500" />
@@ -89,11 +90,11 @@ export default function LogViewer({ projectId, token }: Props) {
               : "No logs available. Deploy your app first."}
           </div>
         ) : (
-          <div className="overflow-x-auto max-h-[500px] overflow-y-auto font-mono text-xs leading-relaxed">
+          <div className="max-h-[500px] overflow-x-auto overflow-y-auto font-mono text-xs leading-relaxed">
             {logs.map((log, i) => (
               <div
                 key={i}
-                className="flex gap-3 px-4 py-1 hover:bg-zinc-900/50 border-b border-zinc-900 last:border-0"
+                className="flex gap-3 border-b border-zinc-900 px-4 py-1 hover:bg-zinc-900/50 last:border-0"
               >
                 <span className="text-zinc-600 shrink-0 select-none tabular-nums">
                   {new Date(log.timestamp).toLocaleTimeString()}
@@ -110,7 +111,7 @@ export default function LogViewer({ projectId, token }: Props) {
             ))}
           </div>
         )}
-      </div>
+      </GlassPanel>
     </div>
   );
 }

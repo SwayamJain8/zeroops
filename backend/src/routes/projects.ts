@@ -7,6 +7,10 @@ import {
   analyzeStackWithAIRefinement,
   type DeploymentIntent,
 } from "../services/analyzer";
+import {
+  createRuleBasedPlan,
+  refinePlanWithGemini,
+} from "../services/deployPlanner";
 
 const router = Router();
 
@@ -111,6 +115,7 @@ router.post(
 
     // Analyze repo
     let stackInfo;
+    let deploymentPlan;
     try {
       const octokit = createOctokitClient(user.github_access_token);
       const tree = await fetchRepoTree(octokit, repoInfo.owner, repoInfo.repo);
@@ -120,6 +125,8 @@ router.post(
         keyFiles,
         deployment_type as DeploymentIntent
       );
+      const rulePlan = createRuleBasedPlan(tree, keyFiles, stackInfo);
+      deploymentPlan = await refinePlanWithGemini(tree, keyFiles, stackInfo, rulePlan);
     } catch (err: any) {
       res.status(400).json({ error: `Failed to analyze repo: ${err.message}` });
       return;
@@ -136,7 +143,7 @@ router.post(
         repo_url,
         repo_owner: repoInfo.owner,
         repo_name: repoInfo.repo,
-        stack_info: stackInfo,
+        stack_info: { ...stackInfo, deploymentPlan },
         env_vars: env_vars || [],
         status: "idle",
       })

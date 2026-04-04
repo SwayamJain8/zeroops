@@ -3,52 +3,62 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: #fafafa;
-  --foreground: #0a0a0a;
-  --card: #ffffff;
-  --card-foreground: #0a0a0a;
-  --popover: #ffffff;
-  --popover-foreground: #0a0a0a;
-  --primary: #0f172a;
-  --primary-foreground: #f8fafc;
-  --secondary: #f1f5f9;
-  --secondary-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #f1f5f9;
-  --accent-foreground: #0f172a;
-  --destructive: #ef4444;
-  --destructive-foreground: #f8fafc;
-  --border: #e2e8f0;
-  --input: #e2e8f0;
-  --ring: #0f172a;
-  --radius: 0.5rem;
-  --success: #22c55e;
-  --warning: #f59e0b;
+  --background: #080b14;
+  --foreground: #eef4ff;
+  --card: #0d1322;
+  --card-foreground: #f5f8ff;
+  --popover: #0d1322;
+  --popover-foreground: #f5f8ff;
+  --primary: #7c9dff;
+  --primary-foreground: #091024;
+  --secondary: #121a2e;
+  --secondary-foreground: #cfd9f9;
+  --muted: #121a2e;
+  --muted-foreground: #93a3cb;
+  --accent: #1a2442;
+  --accent-foreground: #deebff;
+  --destructive: #ff5c8a;
+  --destructive-foreground: #fff4f7;
+  --border: #233059;
+  --input: #18213d;
+  --ring: #9cb3ff;
+  --radius: 0.85rem;
+  --success: #29d8a0;
+  --warning: #ffb44c;
+  --brand-cyan: #46e6ff;
+  --brand-violet: #8d83ff;
+  --brand-rose: #ff7ad6;
+  --surface-glass: rgba(17, 25, 47, 0.62);
+  --surface-glass-strong: rgba(12, 20, 40, 0.9);
 }
 
 .dark {
-  --background: #09090b;
-  --foreground: #fafafa;
-  --card: #0a0a0a;
-  --card-foreground: #fafafa;
-  --popover: #0a0a0a;
-  --popover-foreground: #fafafa;
-  --primary: #f8fafc;
-  --primary-foreground: #0f172a;
-  --secondary: #1e293b;
-  --secondary-foreground: #f8fafc;
-  --muted: #1e293b;
-  --muted-foreground: #94a3b8;
-  --accent: #1e293b;
-  --accent-foreground: #f8fafc;
-  --destructive: #ef4444;
-  --destructive-foreground: #f8fafc;
-  --border: #1e293b;
-  --input: #1e293b;
-  --ring: #cbd5e1;
-  --success: #22c55e;
-  --warning: #f59e0b;
+  --background: #080b14;
+  --foreground: #eef4ff;
+  --card: #0d1322;
+  --card-foreground: #f5f8ff;
+  --popover: #0d1322;
+  --popover-foreground: #f5f8ff;
+  --primary: #7c9dff;
+  --primary-foreground: #091024;
+  --secondary: #121a2e;
+  --secondary-foreground: #cfd9f9;
+  --muted: #121a2e;
+  --muted-foreground: #93a3cb;
+  --accent: #1a2442;
+  --accent-foreground: #deebff;
+  --destructive: #ff5c8a;
+  --destructive-foreground: #fff4f7;
+  --border: #233059;
+  --input: #18213d;
+  --ring: #9cb3ff;
+  --success: #29d8a0;
+  --warning: #ffb44c;
+  --brand-cyan: #46e6ff;
+  --brand-violet: #8d83ff;
+  --brand-rose: #ff7ad6;
+  --surface-glass: rgba(17, 25, 47, 0.62);
+  --surface-glass-strong: rgba(12, 20, 40, 0.9);
 }
 
 @theme inline {
@@ -73,6 +83,9 @@
   --color-ring: var(--ring);
   --color-success: var(--success);
   --color-warning: var(--warning);
+  --color-brand-cyan: var(--brand-cyan);
+  --color-brand-violet: var(--brand-violet);
+  --color-brand-rose: var(--brand-rose);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -84,8 +97,44 @@
 body {
   background: var(--background);
   color: var(--foreground);
+  min-height: 100vh;
+  background-image:
+    radial-gradient(80rem 50rem at 10% -20%, rgba(70, 230, 255, 0.18), transparent 55%),
+    radial-gradient(70rem 40rem at 90% -10%, rgba(141, 131, 255, 0.22), transparent 60%);
 }
 
 * {
   border-color: var(--border);
+}
+
+.surface-glass {
+  background: var(--surface-glass);
+  border: 1px solid rgba(156, 179, 255, 0.18);
+  backdrop-filter: blur(14px);
+}
+
+.surface-glass-strong {
+  background: var(--surface-glass-strong);
+  border: 1px solid rgba(156, 179, 255, 0.22);
+  backdrop-filter: blur(14px);
+}
+
+.ambient-grid {
+  background-image:
+    linear-gradient(to right, rgba(124, 157, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(124, 157, 255, 0.08) 1px, transparent 1px);
+  background-size: 50px 50px;
+}
+
+.glow-text {
+  text-shadow: 0 0 22px rgba(124, 157, 255, 0.45);
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
 }

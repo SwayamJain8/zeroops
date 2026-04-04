@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { AmbientBackdrop } from "@/components/design/primitives";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ZeroOps — Deploy. Debug. Fix.",
-  description: "AI-powered deployment that talks back.",
+  title: "ZeroOps — AI Deploy Workspace",
+  description: "Design-forward AI platform to deploy, debug, and auto-fix apps.",
 };
 
 export default function RootLayout({
@@ -28,6 +29,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-background text-foreground">
+        <AmbientBackdrop />
         {children}
       </body>
     </html>

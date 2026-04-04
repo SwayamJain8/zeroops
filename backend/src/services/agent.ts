@@ -13,6 +13,11 @@ import { executeCreateFixPr, type FixPrArgs } from "../tools/createFixPr";
 import { executeGetDeploymentStatus } from "../tools/getDeploymentStatus";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const GEMINI_MODELS =
+  process.env.GEMINI_MODELS?.split(",").map((m) => m.trim()).filter(Boolean) || [
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+  ];
 
 const SYSTEM_PROMPT = `You are ZeroOps AI, an expert deployment assistant. You help users deploy apps, debug failures, and fix issues through conversation.
 
@@ -155,6 +160,62 @@ const toolDefinitions: Tool = {
   ],
 };
 
+function isQuotaOrRateLimitError(error: any): boolean {
+  const raw = error?.message || String(error || "");
+  return (
+    raw.includes("RESOURCE_EXHAUSTED") ||
+    raw.includes("Quota exceeded") ||
+    raw.includes("\"code\":429") ||
+    raw.includes("rate limit") ||
+    raw.includes("quota")
+  );
+}
+
+function extractRetrySeconds(error: any): number | null {
+  const raw = error?.message || String(error || "");
+  const retryDelayMatch = raw.match(/"retryDelay":"(\d+)s"/);
+  if (retryDelayMatch?.[1]) return parseInt(retryDelayMatch[1], 10);
+  const retryInMatch = raw.match(/retry in ([\d.]+)s/i);
+  if (retryInMatch?.[1]) return Math.ceil(parseFloat(retryInMatch[1]));
+  return null;
+}
+
+function toUserFacingError(error: any): Error {
+  if (isQuotaOrRateLimitError(error)) {
+    const retryAfter = extractRetrySeconds(error);
+    const retryLine = retryAfter
+      ? `Please retry in about ${retryAfter} seconds.`
+      : "Please retry in a minute.";
+    return new Error(
+      `Gemini quota/rate limit reached for this API key. ${retryLine} You can also switch to a paid Gemini plan or use another API key.`
+    );
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+async function sendMessageWithRetry(
+  chat: any,
+  payload: any,
+  maxAttempts: number = 2
+): Promise<any> {
+  let lastError: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await (await chat).sendMessage(payload);
+    } catch (error) {
+      lastError = error;
+      if (!isQuotaOrRateLimitError(error) || attempt === maxAttempts) {
+        throw error;
+      }
+      const retryAfter = extractRetrySeconds(error) ?? 2;
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(Math.max(retryAfter, 1), 45) * 1000)
+      );
+    }
+  }
+  throw lastError;
+}
+
 async function executeTool(
   name: string,
   args: Record<string, any>
@@ -190,6 +251,10 @@ export async function runAgent(
   callbacks: StreamCallbacks
 ) {
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error("Gemini API key is missing in backend environment.");
+    }
+
     const { data: project } = await supabaseAdmin
       .from("projects")
       .select("*")
@@ -228,21 +293,43 @@ export async function runAgent(
       content: userMessage,
     });
 
-    const chat = ai.chats.create({
-      model: "gemini-2.5-flash",
-      config: {
-        systemInstruction: SYSTEM_PROMPT + projectContext,
-        tools: [toolDefinitions],
-        toolConfig: {
-          functionCallingConfig: {
-            mode: FunctionCallingConfigMode.AUTO,
+    let fullResponse = "";
+    let chat: any = null;
+    let initialResponse: any = null;
+    let modelError: any = null;
+
+    for (const model of GEMINI_MODELS) {
+      const candidateChat = ai.chats.create({
+        model,
+        config: {
+          systemInstruction: SYSTEM_PROMPT + projectContext,
+          tools: [toolDefinitions],
+          toolConfig: {
+            functionCallingConfig: {
+              mode: FunctionCallingConfigMode.AUTO,
+            },
           },
         },
-      },
-      history: chatHistory,
-    });
+        history: chatHistory,
+      });
 
-    let fullResponse = "";
+      try {
+        initialResponse = await sendMessageWithRetry(candidateChat, {
+          message: userMessage,
+        });
+        chat = candidateChat;
+        break;
+      } catch (error) {
+        modelError = error;
+        if (!isQuotaOrRateLimitError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    if (!chat || !initialResponse) {
+      throw toUserFacingError(modelError || new Error("Failed to initialize Gemini chat."));
+    }
 
     const processResponse = async (response: any) => {
       const candidates = response.candidates;
@@ -263,7 +350,7 @@ export async function runAgent(
           const result = await executeTool(name!, args as Record<string, any>);
           callbacks.onToolResult(name!, result);
 
-          const followUp = await (await chat).sendMessage({
+          const followUp = await sendMessageWithRetry(chat, {
             message: [
               {
                 functionResponse: {
@@ -279,11 +366,7 @@ export async function runAgent(
       }
     };
 
-    const response = await (await chat).sendMessage({
-      message: userMessage,
-    });
-
-    await processResponse(response);
+    await processResponse(initialResponse);
 
     if (fullResponse) {
       await supabaseAdmin.from("chat_messages").insert({
@@ -296,6 +379,6 @@ export async function runAgent(
 
     callbacks.onDone(fullResponse);
   } catch (error: any) {
-    callbacks.onError(error);
+    callbacks.onError(toUserFacingError(error));
   }
 }

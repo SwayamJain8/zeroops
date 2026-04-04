@@ -1,7 +1,9 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/client";
-import { Zap } from "lucide-react";
+import { ArrowRight, ShieldCheck } from "lucide-react";
+import Image from "next/image";
+import { GlassPanel } from "@/components/design/primitives";
 
 function GitHubIcon({ className }: { className?: string }) {
   return (
@@ -24,35 +26,59 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="w-full max-w-md px-8">
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center gap-2 mb-6">
-            <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
-              <Zap className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <span className="text-2xl font-bold tracking-tight">ZeroOps</span>
+    <main className="flex min-h-screen items-center justify-center px-4">
+      <div className="grid w-full max-w-5xl gap-6 lg:grid-cols-2">
+        <GlassPanel className="p-8">
+          <div className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs text-muted-foreground">
+            <Image src="/logo.png" alt="ZeroOps logo" width={44} height={44} />
+            ZeroOps Access Portal
           </div>
-          <h1 className="text-3xl font-bold tracking-tight mb-2">
-            Deploy. Debug. Fix.
+          <h1 className="mt-5 text-3xl font-semibold tracking-tight">
+            Connect GitHub. Deploy with AI.
           </h1>
-          <p className="text-muted-foreground text-lg">
-            AI-powered deployment that talks back.
+          <p className="mt-2 text-sm text-muted-foreground">
+            Sign in once and get a Cursor-like deployment cockpit with chat-native debugging.
           </p>
-        </div>
+          <div className="mt-8 space-y-3">
+            <div className="rounded-xl border border-border bg-background/40 p-3 text-sm text-muted-foreground">
+              Repo analysis + deployment planning
+            </div>
+            <div className="rounded-xl border border-border bg-background/40 p-3 text-sm text-muted-foreground">
+              Runtime logs + AI diagnosis loop
+            </div>
+            <div className="rounded-xl border border-border bg-background/40 p-3 text-sm text-muted-foreground">
+              Optional fix PR flow with explicit approval
+            </div>
+          </div>
+        </GlassPanel>
 
-        <button
-          onClick={handleLogin}
-          className="w-full flex items-center justify-center gap-3 px-6 py-3.5 rounded-lg bg-primary text-primary-foreground font-medium text-base hover:opacity-90 transition-opacity cursor-pointer"
-        >
-          <GitHubIcon className="w-5 h-5" />
-          Continue with GitHub
-        </button>
+        <GlassPanel className="p-8">
+          <div className="mb-7">
+            <div className="inline-flex items-center gap-2">
+              <div className="rounded-xl bg-brand-violet/20 p-2">
+                <ShieldCheck className="h-5 w-5 text-brand-violet" />
+              </div>
+              <span className="text-xl font-semibold">Secure Sign In</span>
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              We request repo access only to build, deploy, and open approved fix PRs.
+            </p>
+          </div>
 
-        <p className="text-center text-sm text-muted-foreground mt-6">
-          We&apos;ll need repo access to deploy and fix your apps.
-        </p>
+          <button
+            onClick={handleLogin}
+            className="w-full flex items-center justify-center gap-3 rounded-xl bg-primary px-6 py-3.5 text-base font-medium text-primary-foreground transition hover:opacity-90 cursor-pointer"
+          >
+            <GitHubIcon className="w-5 h-5" />
+            Continue with GitHub
+            <ArrowRight className="h-4 w-4" />
+          </button>
+
+          <p className="mt-5 text-center text-xs text-muted-foreground">
+            By continuing, you allow ZeroOps to read repositories and deployment metadata.
+          </p>
+        </GlassPanel>
       </div>
-    </div>
+    </main>
   );
 }

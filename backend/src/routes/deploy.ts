@@ -2,6 +2,7 @@ import { Router, Response } from "express";
 import { AuthenticatedRequest, requireAuth } from "../middleware/auth";
 import { supabaseAdmin } from "../db/supabase";
 import { addDeployJob } from "../queue/deployQueue";
+import { logger } from "../services/logger";
 
 async function getUserGithubToken(userId: string): Promise<string | undefined> {
   const { data } = await supabaseAdmin
@@ -19,6 +20,7 @@ router.post(
   requireAuth,
   async (req: AuthenticatedRequest, res: Response) => {
     const projectId = req.params.projectId as string;
+    logger.info("DEPLOY", `Deploy requested for projectId=${projectId} by user=${req.userId}`);
 
     const { data: project, error } = await supabaseAdmin
       .from("projects")
@@ -28,11 +30,13 @@ router.post(
       .single();
 
     if (error || !project) {
+      logger.warn("DEPLOY", `Project not found or unauthorized: ${projectId}`);
       res.status(404).json({ error: "Project not found" });
       return;
     }
 
     if (project.status === "building") {
+      logger.warn("DEPLOY", `Project ${project.slug} already building`);
       res.status(409).json({ error: "Deployment already in progress" });
       return;
     }
@@ -48,6 +52,7 @@ router.post(
       .single();
 
     if (deployError || !deployment) {
+      logger.error("DEPLOY", `Failed creating deployment record for project=${project.slug}`, deployError);
       res.status(500).json({ error: "Failed to create deployment" });
       return;
     }
@@ -60,6 +65,10 @@ router.post(
 
     // Get GitHub token for private repo cloning
     const githubToken = await getUserGithubToken(req.userId!);
+    logger.info(
+      "DEPLOY",
+      `Queueing deployment id=${deployment.id} for ${project.slug} (private clone token=${githubToken ? "yes" : "no"})`
+    );
 
     // Add to deploy queue
     await addDeployJob({
@@ -81,6 +90,7 @@ router.get(
   requireAuth,
   async (req: AuthenticatedRequest, res: Response) => {
     const { projectId } = req.params;
+    logger.info("DEPLOY_STATUS", `SSE status stream opened for projectId=${projectId}`);
 
     // SSE for real-time status
     res.setHeader("Content-Type", "text/event-stream");
@@ -128,6 +138,7 @@ router.get(
 
     req.on("close", () => {
       clearInterval(interval);
+      logger.info("DEPLOY_STATUS", `SSE status stream closed for projectId=${projectId}`);
     });
   }
 );

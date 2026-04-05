@@ -31,6 +31,8 @@ const APP_SIGNAL_FILES = new Set([
   "dockerfile",
   "app.py",
   "main.py",
+  "go.mod",
+  "main.go",
   "server.js",
 ]);
 
@@ -165,12 +167,6 @@ function validateDeployability(args: {
       "Unsupported repository structure for auto-deploy. Add a Dockerfile or use a supported stack layout."
     );
   }
-  if (stackInfo.backend === "go") {
-    errors.push(
-      "Go auto-deploy is temporarily disabled in this build. Please add a custom Dockerfile for Go projects."
-    );
-  }
-
   if (shouldUseMonorepoSplit) {
     const appCount = filesSummary?.monorepoAppPaths.length ?? 0;
     if (filesSummary && appCount < 2) {

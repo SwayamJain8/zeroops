@@ -40,8 +40,25 @@ export function generateDockerfile(
   // Use ECR Public Gallery mirrors to avoid Docker Hub rate limits
   const NODE_IMAGE = "public.ecr.aws/docker/library/node:20-alpine";
   const PYTHON_IMAGE = "public.ecr.aws/docker/library/python:3.12-slim";
+  const GO_IMAGE = "public.ecr.aws/docker/library/golang:1.22-alpine";
 
   if (plan) {
+    const isGoPlan =
+      stack.backend === "go" ||
+      plan.runtime === "go" ||
+      /\bgo\s+(mod|build|run|test)\b/.test(
+        `${plan.installCommand || ""} ${plan.buildCommand || ""} ${plan.runCommand || ""}`
+      );
+    const normalizedPlan = isGoPlan
+      ? {
+          ...plan,
+          runtime: "go" as const,
+          installCommand: "go mod download",
+          buildCommand: "go build -o /tmp/zeroops-server .",
+          runCommand: "/tmp/zeroops-server",
+        }
+      : plan;
+
     const argLines = buildEnvVars
       .map((v) => `ARG ${v.key}`)
       .join("\n");
@@ -50,34 +67,49 @@ export function generateDockerfile(
       .join("\n");
     const buildEnvBlock = [argLines, envLines].filter(Boolean).join("\n");
 
-    if (plan.runtime === "python") {
+    if (normalizedPlan.runtime === "python") {
       return `FROM ${PYTHON_IMAGE}
 WORKDIR /workspace
 COPY . .
 ${buildEnvBlock}
-RUN sh -lc "cd ${plan.appPath} && ${plan.installCommand}"
+RUN sh -lc "cd ${normalizedPlan.appPath} && ${normalizedPlan.installCommand}"
 EXPOSE 3000
 ENV PORT=3000
-CMD ["sh", "-lc", "cd ${plan.appPath} && ${plan.runCommand}"]`;
+CMD ["sh", "-lc", "cd ${normalizedPlan.appPath} && ${normalizedPlan.runCommand}"]`;
+    }
+
+    if (normalizedPlan.runtime === "go") {
+      const buildStep = normalizedPlan.buildCommand
+        ? `RUN sh -c "cd ${normalizedPlan.appPath} && ${normalizedPlan.buildCommand}"`
+        : "";
+      return `FROM ${GO_IMAGE}
+WORKDIR /workspace
+COPY . .
+${buildEnvBlock}
+RUN sh -c "cd ${normalizedPlan.appPath} && ${normalizedPlan.installCommand}"
+${buildStep}
+EXPOSE 3000
+ENV PORT=3000
+CMD ["sh", "-c", "cd ${normalizedPlan.appPath} && ${normalizedPlan.runCommand}"]`;
     }
 
     // node/static frontend/backend generic runtime
-    const needsServe = /\bserve\s+-s\b/.test(plan.runCommand);
+    const needsServe = /\bserve\s+-s\b/.test(normalizedPlan.runCommand);
     const maybeInstallServe = needsServe ? "RUN npm i -g serve" : "";
-    const buildStep = plan.buildCommand
-      ? `RUN sh -lc "cd ${plan.appPath} && ${plan.buildCommand}"`
+    const buildStep = normalizedPlan.buildCommand
+      ? `RUN sh -lc "cd ${normalizedPlan.appPath} && ${normalizedPlan.buildCommand}"`
       : "";
     return `FROM ${NODE_IMAGE}
 WORKDIR /workspace
 COPY . .
 ${buildEnvBlock}
-RUN sh -lc "cd ${plan.appPath} && ${plan.installCommand}"
+RUN sh -lc "cd ${normalizedPlan.appPath} && ${normalizedPlan.installCommand}"
 ${maybeInstallServe}
 ${buildStep}
 EXPOSE 3000
 ENV PORT=3000
 ENV HOST=0.0.0.0
-CMD ["sh", "-lc", "cd ${plan.appPath} && ${plan.runCommand}"]`;
+CMD ["sh", "-lc", "cd ${normalizedPlan.appPath} && ${normalizedPlan.runCommand}"]`;
   }
 
   if (stack.backend === "node") {
@@ -100,6 +132,17 @@ COPY . .
 EXPOSE 3000
 ENV PORT=3000
 CMD ["python", "app.py"]`;
+  }
+
+  if (stack.backend === "go") {
+    return `FROM ${GO_IMAGE}
+WORKDIR /app
+COPY . .
+RUN go mod download
+RUN go build -o /tmp/zeroops-server .
+EXPOSE 3000
+ENV PORT=3000
+CMD ["/tmp/zeroops-server"]`;
   }
 
   if (stack.frontend === "react") {
@@ -232,7 +275,13 @@ export async function triggerBuild(
 ): Promise<{ buildId: string; ecrUri: string }> {
   const ecrUri = await ensureEcrRepo(projectSlug);
   const dockerfile = generateDockerfile(stack, plan, buildEnvVars);
-  const forceDockerfile = stack.frontend === "static";
+  const forceDockerfile =
+    stack.frontend === "static" ||
+    stack.backend === "go" ||
+    plan?.runtime === "go" ||
+    /\bgo\s+(mod|build|run|test)\b/.test(
+      `${plan?.installCommand || ""} ${plan?.buildCommand || ""} ${plan?.runCommand || ""}`
+    );
   const buildSpec = generateBuildSpec(
     repoUrl,
     ecrUri,

@@ -9,7 +9,7 @@ export interface DeploymentPlan {
   runCommand: string;
   outputDir: string | null;
   healthPath: string;
-  runtime: "node" | "python" | "static";
+  runtime: "node" | "python" | "go" | "static";
   notes: string[];
 }
 
@@ -86,6 +86,31 @@ function pickBestPythonAppPath(files: RepoFile[]): string {
     if (p.endsWith("/start.py") || p === "start.py") add(d, 6);
     if (p.endsWith("/app.py") || p === "app.py") add(d, 4);
     if (p.endsWith("/main.py") || p === "main.py") add(d, 4);
+  }
+
+  let bestDir = ".";
+  let bestScore = -1;
+  for (const [dir, s] of score.entries()) {
+    if (s > bestScore) {
+      bestDir = dir;
+      bestScore = s;
+    }
+  }
+  return bestDir;
+}
+
+function pickBestGoAppPath(files: RepoFile[]): string {
+  const filePaths = files.filter((f) => f.type === "file").map((f) => f.path);
+  const score = new Map<string, number>();
+  const add = (dir: string, points: number) =>
+    score.set(dir, (score.get(dir) || 0) + points);
+
+  for (const p of filePaths) {
+    const d = dirname(p);
+    if (p.endsWith("/go.mod") || p === "go.mod") add(d, 8);
+    if (p.endsWith("/main.go") || p === "main.go") add(d, 6);
+    if (p.endsWith("/go.sum") || p === "go.sum") add(d, 3);
+    if (p.endsWith("/cmd/server/main.go")) add(d, 10);
   }
 
   let bestDir = ".";
@@ -313,6 +338,21 @@ export function createRuleBasedPlan(
     };
   }
 
+  // 6) Go backend
+  if (stack.backend === "go") {
+    const appPath = pickBestGoAppPath(files);
+    return {
+      appPath,
+      installCommand: "go mod download",
+      buildCommand: "go build -o /tmp/zeroops-server .",
+      runCommand: "/tmp/zeroops-server",
+      outputDir: null,
+      healthPath: "/",
+      runtime: "go",
+      notes: [`Detected Go backend app at "${appPath}".`],
+    };
+  }
+
   // Fallback: strict unknown handling
   return {
     appPath: ".",
@@ -352,7 +392,7 @@ Return JSON only with this exact schema:
   "runCommand":"string",
   "outputDir":"string|null",
   "healthPath":"string",
-  "runtime":"node|python|static",
+  "runtime":"node|python|go|static",
   "notes":["string"]
 }
 
@@ -396,6 +436,7 @@ Rules:
       runtime:
         parsed.runtime === "node" ||
         parsed.runtime === "python" ||
+        parsed.runtime === "go" ||
         parsed.runtime === "static"
           ? parsed.runtime
           : plan.runtime,
@@ -407,6 +448,21 @@ Rules:
         ...refined,
         outputDir: refined.outputDir || plan.outputDir || "dist",
       });
+    }
+
+    // Keep Go runtime deterministic. AI refinement can drift runtime/commands.
+    if (stack.backend === "go") {
+      const appPath = pickBestGoAppPath(files);
+      return {
+        ...plan,
+        appPath,
+        runtime: "go",
+        installCommand: "go mod download",
+        buildCommand: "go build -o /tmp/zeroops-server .",
+        runCommand: "/tmp/zeroops-server",
+        healthPath: "/",
+        notes: [...(plan.notes || []), "Go normalization applied after AI refinement."],
+      };
     }
 
     return normalizePythonPlanWithRepoFiles(stack, refined, files);
